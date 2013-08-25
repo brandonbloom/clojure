@@ -79,7 +79,38 @@
            vs-32 vs
            vs nil))
     (testing "internal-reduce"
-      (is (= [99] (into [] (drop 99 vs)))))))
+      (is (= [99] (into [] (drop 99 vs)))))
+    (testing "Iterable.iterator"
+      (is (thrown? java.util.NoSuchElementException
+            (let [iter (.iterator vs)]
+              (dotimes [_ 101]
+                (.next iter)))))
+      (is (= (iterator-seq (.iterator vs)) r)))
+    (testing "List.listIterator"
+      (are [iexpr cnt]
+        (thrown? java.util.NoSuchElementException
+          (let [iter iexpr]
+            (dotimes [_ cnt]
+              (.next iter))))
+        (.listIterator vs)    101
+        (.listIterator vs 10) 91)
+      (is (= (iterator-seq (.listIterator vs)) r))
+      (is (= (iterator-seq (.listIterator vs 10)) (drop 10 r))))))
+
+(deftest test-vec-iterators
+  (testing "(vector-of :long) iterator"
+    (let [r (range 100)
+          v (into (vector-of :long) r)]
+      (are [iexpr cnt]
+        (thrown? java.util.NoSuchElementException
+          (let [iter iexpr]
+            (dotimes [_ cnt]
+              (.next iter))))
+        (.listIterator v)    101
+        (.listIterator v 10) 91)
+      (is (= (iterator-seq (.iterator v)) r))
+      (is (= (iterator-seq (.listIterator v)) r))
+      (is (= (iterator-seq (.listIterator v 10)) (drop 10 r))))))
 
 (deftest test-primitive-subvector-reduce
   ;; regression test for CLJ-1082
