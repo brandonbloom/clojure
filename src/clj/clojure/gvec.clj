@@ -64,6 +64,7 @@
   (array [^int size])
   (^int alength [arr])
   (aclone [arr])
+  (acopy [src ^int src-idx dst ^int dst-idx ^int n])
   (aget [arr ^int i])
   (aset [arr ^int i val]))
 
@@ -298,7 +299,7 @@
 
 (defn- editable-tail [^clojure.core.ArrayManager am tail]
   (let [ret (.array am 32)]
-    (System/arraycopy tail 0 ret 0 (.alength am tail))
+    (.acopy am tail 0 ret 0 (.alength am tail))
     ret))
 
 (deftype Vec [^clojure.core.ArrayManager am ^int cnt ^int shift ^clojure.core.VecNode root tail _meta
@@ -351,7 +352,7 @@
   (cons [this val]
      (if (< (- cnt (.tailoff this)) (int 32))
       (let [new-tail (.array am (inc (.alength am tail)))]
-        (System/arraycopy tail 0 new-tail 0 (.alength am tail))
+        (.acopy am tail 0 new-tail 0 (.alength am tail))
         (.aset am new-tail (.alength am tail) val)
         (new Vec am (inc cnt) shift root new-tail (meta this) -1 -1))
       (let [tail-node (VecNode. (.edit root) tail)] 
@@ -391,7 +392,7 @@
     (new Vec am 0 5 EMPTY-NODE (.array am 0) (meta this) empty-vector-hashcode empty-vector-hasheq)
     (> (- cnt (.tailoff this)) 1)
       (let [new-tail (.array am (dec (.alength am tail)))]
-        (System/arraycopy tail 0 new-tail 0 (.alength am new-tail))
+        (.acopy am tail 0 new-tail 0 (.alength am new-tail))
         (new Vec am (dec cnt) shift root new-tail (meta this) -1 -1))
     :else
       (let [new-tail (.arrayFor this (- cnt 2))
@@ -410,7 +411,7 @@
      (and (<= (int 0) i) (< i cnt))
        (if (>= i (.tailoff this))
          (let [new-tail (.array am (.alength am tail))]
-           (System/arraycopy tail 0 new-tail 0 (.alength am tail))
+           (.acopy am tail 0 new-tail 0 (.alength am tail))
            (.aset am new-tail (bit-and i (int 0x1f)) val)
            (new Vec am cnt shift root new-tail (meta this) -1 -1))
          (new Vec am cnt shift (.doAssoc this shift root i val) tail (meta this) -1 -1))
@@ -627,12 +628,17 @@
   ((get (methods print-method) clojure.lang.IPersistentVector) v w))
 
 (defmacro mk-am {:private true} [t]
-  (let [garr (gensym)
-        tgarr (with-meta garr {:tag (symbol (str t "s"))})]
+  (let [tag (symbol (str t "s"))
+        garr (gensym)
+        tgarr (with-meta garr {:tag tag})
+        garr2 (gensym)
+        tgarr2 (with-meta garr2 {:tag tag})]
     `(reify clojure.core.ArrayManager
             (array [_ size#] (~(symbol (str t "-array")) size#))
             (alength [_ ~garr] (alength ~tgarr))
             (aclone [_ ~garr] (aclone ~tgarr))
+            (acopy [_ ~garr src-idx# ~garr2 dst-idx# n#]
+              (System/arraycopy ~tgarr src-idx# ~tgarr2 dst-idx# n#))
             (aget [_ ~garr i#] (aget ~tgarr i#))
             (aset [_ ~garr i# val#] (aset ~tgarr i# (~t val#))))))
 
@@ -877,7 +883,7 @@
     (.ensureEditable this)
     (.. root -edit (set nil))
     (let [trimmed-tail (.array am (- cnt (.tailoff this)))]
-      (System/arraycopy tail 0 trimmed-tail 0 (.alength am trimmed-tail))
+      (.acopy am tail 0 trimmed-tail 0 (.alength am trimmed-tail))
       (Vec. am cnt shift root trimmed-tail nil -1 -1)))
 
   clojure.lang.ILookup
