@@ -15,27 +15,22 @@ package clojure.lang;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Iterator;
-import java.util.concurrent.atomic.AtomicReference;
 
 public class PersistentVector extends APersistentVector implements IObj, IEditableCollection, IReduce{
 
 public static class Node implements Serializable {
-	transient public final AtomicReference<Thread> edit;
 	public final Object[] array;
 
-	public Node(AtomicReference<Thread> edit, Object[] array){
-		this.edit = edit;
+	public Node(Object[] array){
 		this.array = array;
 	}
 
-	Node(AtomicReference<Thread> edit){
-		this.edit = edit;
+	Node(){
 		this.array = new Object[32];
 	}
 }
 
-final static AtomicReference<Thread> NOEDIT = new AtomicReference<Thread>(null);
-public final static Node EMPTY_NODE = new Node(NOEDIT, new Object[32]);
+public final static Node EMPTY_NODE = new Node(new Object[32]);
 
 final int cnt;
 public final int shift;
@@ -183,7 +178,7 @@ public PersistentVector assocN(int i, Object val){
 }
 
 private static Node doAssoc(int level, Node node, int i, Object val){
-	Node ret = new Node(node.edit,node.array.clone());
+	Node ret = new Node(node.array.clone());
 	if(level == 0)
 		{
 		ret.array[i & 0x01f] = val;
@@ -222,14 +217,14 @@ public PersistentVector cons(Object val){
 		}
 	//full tail, push into tree
 	Node newroot;
-	Node tailnode = new Node(root.edit,tail);
+	Node tailnode = new Node(tail);
 	int newshift = shift;
 	//overflow root?
 	if((cnt >>> 5) > (1 << shift))
 		{
-		newroot = new Node(root.edit);
+		newroot = new Node();
 		newroot.array[0] = root;
-		newroot.array[1] = newPath(root.edit,shift, tailnode);
+		newroot.array[1] = newPath(shift, tailnode);
 		newshift += 5;
 		}
 	else
@@ -243,7 +238,7 @@ private Node pushTail(int level, Node parent, Node tailnode){
 	// else alloc new path
 	//return  nodeToInsert placed in copy of parent
 	int subidx = ((cnt - 1) >>> level) & 0x01f;
-	Node ret = new Node(parent.edit, parent.array.clone());
+	Node ret = new Node(parent.array.clone());
 	Node nodeToInsert;
 	if(level == 5)
 		{
@@ -254,17 +249,17 @@ private Node pushTail(int level, Node parent, Node tailnode){
 		Node child = (Node) parent.array[subidx];
 		nodeToInsert = (child != null)?
 		                pushTail(level-5,child, tailnode)
-		                :newPath(root.edit,level-5, tailnode);
+		                :newPath(level-5, tailnode);
 		}
 	ret.array[subidx] = nodeToInsert;
 	return ret;
 }
 
-private static Node newPath(AtomicReference<Thread> edit,int level, Node node){
+private static Node newPath(int level, Node node){
 	if(level == 0)
 		return node;
-	Node ret = new Node(edit);
-	ret.array[0] = newPath(edit, level - 5, node);
+	Node ret = new Node();
+	ret.array[0] = newPath(level - 5, node);
 	return ret;
 }
 
@@ -491,7 +486,7 @@ private Node popTail(int level, Node node){
 			return null;
 		else
 			{
-			Node ret = new Node(root.edit, node.array.clone());
+			Node ret = new Node(node.array.clone());
 			ret.array[subidx] = newchild;
 			return ret;
 			}
@@ -500,7 +495,7 @@ private Node popTail(int level, Node node){
 		return null;
 	else
 		{
-		Node ret = new Node(root.edit, node.array.clone());
+		Node ret = new Node(node.array.clone());
 		ret.array[subidx] = null;
 		return ret;
 		}
@@ -511,12 +506,14 @@ static final class TransientVector extends AFn implements ITransientVector, Coun
 	volatile int shift;
 	volatile Node root;
 	volatile Object[] tail;
+  volatile boolean persisted;
 
 	TransientVector(int cnt, int shift, Node root, Object[] tail){
 		this.cnt = cnt;
 		this.shift = shift;
 		this.root = root;
 		this.tail = tail;
+    this.persisted = false;
 	}
 
 	TransientVector(PersistentVector v){
@@ -529,13 +526,13 @@ static final class TransientVector extends AFn implements ITransientVector, Coun
 	}
 	
 	Node ensureEditable(Node node){
-		if(node.edit == root.edit)
+		if(TransientEdit.isEditable(node))
 			return node;
-		return new Node(root.edit, node.array.clone());
+		return new Node(node.array.clone());
 	}
 
 	void ensureEditable(){
-		if(root.edit.get() == null)
+		if(persisted)
 			throw new IllegalAccessError("Transient used after persistent! call");
 
 //		root = editableRoot(root);
@@ -543,17 +540,13 @@ static final class TransientVector extends AFn implements ITransientVector, Coun
 	}
 
 	static Node editableRoot(Node node){
-		return new Node(new AtomicReference<Thread>(Thread.currentThread()), node.array.clone());
+		return new Node(node.array.clone());
 	}
 
 	public PersistentVector persistent(){
 		ensureEditable();
-//		Thread owner = root.edit.get();
-//		if(owner != null && owner != Thread.currentThread())
-//			{
-//			throw new IllegalAccessError("Mutation release by non-owner thread");
-//			}
-		root.edit.set(null);
+		persisted = true;
+    TransientEdit.clear();
 		Object[] trimmedTail = new Object[cnt-tailoff()];
 		System.arraycopy(tail,0,trimmedTail,0,trimmedTail.length);
 		return new PersistentVector(cnt, shift, root, trimmedTail);
@@ -577,16 +570,16 @@ static final class TransientVector extends AFn implements ITransientVector, Coun
 			}
 		//full tail, push into tree
 		Node newroot;
-		Node tailnode = new Node(root.edit, tail);
+		Node tailnode = new Node(tail);
 		tail = new Object[32];
 		tail[0] = val;
 		int newshift = shift;
 		//overflow root?
 		if((cnt >>> 5) > (1 << shift))
 			{
-			newroot = new Node(root.edit);
+			newroot = new Node();
 			newroot.array[0] = root;
-			newroot.array[1] = newPath(root.edit,shift, tailnode);
+			newroot.array[1] = newPath(shift, tailnode);
 			newshift += 5;
 			}
 		else
@@ -615,7 +608,7 @@ static final class TransientVector extends AFn implements ITransientVector, Coun
 			Node child = (Node) parent.array[subidx];
 			nodeToInsert = (child != null) ?
 			               pushTail(level - 5, child, tailnode)
-			                               : newPath(root.edit, level - 5, tailnode);
+			                               : newPath(level - 5, tailnode);
 			}
 		ret.array[subidx] = nodeToInsert;
 		return ret;
@@ -754,7 +747,7 @@ static final class TransientVector extends AFn implements ITransientVector, Coun
 		int newshift = shift;
 		if(newroot == null)
 			{
-			newroot = new Node(root.edit);
+			newroot = new Node();
 			}
 		if(shift > 5 && newroot.array[1] == null)
 			{
